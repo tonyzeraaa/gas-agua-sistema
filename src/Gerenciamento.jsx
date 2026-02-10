@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Container, Typography, Button, Paper, Stack, Box, Grid, CircularProgress, LinearProgress, FormControl, InputLabel, Select, MenuItem, Card, CardContent, IconButton, Fab, Dialog, DialogTitle, DialogContent, DialogActions, TextField, InputAdornment, Tabs, Tab, Divider, Chip, Alert } from '@mui/material'
+import { Container, Typography, Button, Paper, Stack, Box, Grid, CircularProgress, LinearProgress, FormControl, InputLabel, Select, MenuItem, Card, CardContent, IconButton, Fab, Dialog, DialogTitle, DialogContent, DialogActions, TextField, InputAdornment, Tabs, Tab, Divider, Chip, Alert, List, ListItem, ListItemText } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import InventoryIcon from '@mui/icons-material/Inventory'
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong' // Ícone do Extrato
 import RestoreIcon from '@mui/icons-material/Restore'
 import AddCircleIcon from '@mui/icons-material/AddCircle'
 import RemoveCircleIcon from '@mui/icons-material/RemoveCircle'
@@ -10,31 +11,32 @@ import PriceChangeIcon from '@mui/icons-material/PriceChange'
 import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
 import FilterAltIcon from '@mui/icons-material/FilterAlt'
+import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import { supabase } from './supabaseClient'
 
 function Gerenciamento({ aoVoltar }) {
   const [tabAtual, setTabAtual] = useState(0) 
   const [carregando, setCarregando] = useState(true)
   
-  // Dashboard Metrics
+  // --- DASHBOARD (MÉTRICAS) ---
   const [mesSelecionado, setMesSelecionado] = useState(new Date().getMonth())
   const [anoSelecionado, setAnoSelecionado] = useState(new Date().getFullYear())
-  
-  // Filtros Dashboard
   const [vendasBrutas, setVendasBrutas] = useState([]) 
   const [filtroRegiao, setFiltroRegiao] = useState('todos')
-
   const [metricas, setMetricas] = useState({ faturamentoTotal: 0, qtdVendas: 0, porProduto: {}, porPagamento: {}, porRegiao: {} })
 
   // --- EXTRATO DE CONFERÊNCIAS ---
   const [historicoConferencias, setHistoricoConferencias] = useState([])
 
-  // Auxiliares
+  // --- EXTRATO DIÁRIO (NOVA FUNCIONALIDADE) ---
+  const [dataExtrato, setDataExtrato] = useState(new Date().toISOString().split('T')[0]) // Data de Hoje
+  const [extratoDia, setExtratoDia] = useState({ vendas: [], recebimentos: [], totalVendas: 0, totalRecebimentos: 0 })
+
+  // Auxiliares e Modais
   const [listaClientes, setListaClientes] = useState([])
   const [listaProdutos, setListaProdutos] = useState([])
   const [listaPrecos, setListaPrecos] = useState([])
 
-  // Modais
   const [modalRetroativo, setModalRetroativo] = useState(false)
   const [dataRetroativa, setDataRetroativa] = useState(new Date().toISOString().split('T')[0])
   const [clienteRetroativo, setClienteRetroativo] = useState('')
@@ -46,20 +48,29 @@ function Gerenciamento({ aoVoltar }) {
   const [novosPrecos, setNovosPrecos] = useState({})
   const [salvandoPrecos, setSalvandoPrecos] = useState(false)
 
+  // Carrega dados iniciais e Dashboard
   useEffect(() => {
     carregarDados()
   }, [mesSelecionado, anoSelecionado, tabAtual])
 
+  // Recalcula métricas do Dashboard quando filtro muda
   useEffect(() => {
     if (vendasBrutas.length > 0 || !carregando) {
         processarMetricas(vendasBrutas)
     }
   }, [vendasBrutas, filtroRegiao])
 
+  // Carrega Extrato Diário quando muda a Data ou a Aba
+  useEffect(() => {
+    if (tabAtual === 2) {
+        carregarExtratoDia()
+    }
+  }, [dataExtrato, tabAtual])
+
   async function carregarDados() {
     setCarregando(true)
     
-    // 1. Dashboard
+    // 1. Dashboard (Mês inteiro)
     const dataInicio = new Date(anoSelecionado, mesSelecionado, 1).toISOString()
     const dataFim = new Date(anoSelecionado, mesSelecionado + 1, 0, 23, 59, 59).toISOString()
     
@@ -73,12 +84,7 @@ function Gerenciamento({ aoVoltar }) {
 
     // 2. Extrato de Conferências
     if (tabAtual === 1) {
-        const { data: conferencias } = await supabase
-            .from('historico_conferencias')
-            .select('*')
-            .order('data_conferencia', { ascending: false })
-            .limit(50) 
-        
+        const { data: conferencias } = await supabase.from('historico_conferencias').select('*').order('data_conferencia', { ascending: false }).limit(50) 
         if (conferencias) agruparConferencias(conferencias)
     }
 
@@ -90,29 +96,94 @@ function Gerenciamento({ aoVoltar }) {
     if (cli) setListaClientes(cli)
     if (prod) { 
         setListaProdutos(prod)
-        const pi = {}
-        prod.forEach(p => pi[p.id] = p.preco_padrao)
-        setNovosPrecos(pi) 
+        const pi = {}; prod.forEach(p => pi[p.id] = p.preco_padrao); setNovosPrecos(pi) 
     }
     if (prec) setListaPrecos(prec)
 
     setCarregando(false)
   }
 
-  function processarMetricas(dados) {
-    let totalFat = 0
-    let totalQtd = 0
-    const prodCount = {}
-    const pagCount = {}
-    const regiaoCount = {}
+  // --- NOVA FUNÇÃO: CARREGAR EXTRATO DO DIA ---
+  async function carregarExtratoDia() {
+      setCarregando(true)
+      
+      // 1. Buscar Vendas do Dia
+      const inicioDia = `${dataExtrato}T00:00:00`
+      const fimDia = `${dataExtrato}T23:59:59`
 
+      const { data: vendasDia } = await supabase
+          .from('vendas')
+          .select(`id, data_venda, forma_pagamento, clientes ( nome, tipo ), itens_venda ( quantidade, preco_praticado, produtos ( nome ) )`)
+          .gte('data_venda', inicioDia)
+          .lte('data_venda', fimDia)
+          .order('data_venda', { ascending: false })
+
+      // Calcular Total de Vendas
+      let totalVendas = 0
+      const listaVendas = vendasDia || []
+      listaVendas.forEach(v => {
+          const totalV = v.itens_venda.reduce((acc, item) => acc + (item.quantidade * item.preco_praticado), 0)
+          v.total = totalV
+          totalVendas += totalV
+      })
+
+      // 2. Buscar Recebimentos (Varrendo observações dos clientes)
+      // Como não temos tabela de pagamentos, buscamos nas observações que contêm a data
+      const dataFormatada = new Date(dataExtrato + 'T12:00:00').toLocaleDateString('pt-BR') // Ex: 10/02/2026
+      
+      const { data: clientesComObs } = await supabase
+          .from('clientes')
+          .select('id, nome, observacoes')
+          .ilike('observacoes', `%[${dataFormatada}] PAGAMENTO%`) // Busca texto específico
+
+      let totalRecebimentos = 0
+      const listaRecebimentos = []
+
+      if (clientesComObs) {
+          clientesComObs.forEach(cli => {
+              // Quebra as linhas da observação para achar a linha do pagamento
+              const linhas = cli.observacoes.split('\n')
+              linhas.forEach(linha => {
+                  if (linha.includes(`[${dataFormatada}] PAGAMENTO`)) {
+                      // Extrai o valor da string "R$ 50.00"
+                      try {
+                          const parteValor = linha.split('R$ ')[1].split(' ')[0] // Pega o número logo depois do R$
+                          const valor = parseFloat(parteValor)
+                          const obsExtra = linha.split('- ')[1] || '' // Pega o comentário se houver
+
+                          if (!isNaN(valor)) {
+                              totalRecebimentos += valor
+                              listaRecebimentos.push({
+                                  cliente: cli.nome,
+                                  valor: valor,
+                                  obs: obsExtra
+                              })
+                          }
+                      } catch (e) {
+                          console.log('Erro ao ler linha:', linha)
+                      }
+                  }
+              })
+          })
+      }
+
+      setExtratoDia({
+          vendas: listaVendas,
+          recebimentos: listaRecebimentos,
+          totalVendas,
+          totalRecebimentos
+      })
+
+      setCarregando(false)
+  }
+
+  function processarMetricas(dados) {
+    let totalFat = 0; let totalQtd = 0; const prodCount = {}; const pagCount = {}; const regiaoCount = {}
     const dadosFiltrados = dados.filter(venda => {
         if (filtroRegiao === 'todos') return true
         return venda.clientes?.tipo === filtroRegiao
     })
-
     totalQtd = dadosFiltrados.length
-
     dadosFiltrados.forEach(venda => {
       venda.itens_venda.forEach(item => {
         totalFat += (item.quantidade * item.preco_praticado)
@@ -199,7 +270,8 @@ function Gerenciamento({ aoVoltar }) {
 
       <Tabs value={tabAtual} onChange={(e, v) => setTabAtual(v)} variant="fullWidth" style={{ marginBottom: 20 }}>
         <Tab icon={<TrendingUpIcon />} label="Financeiro" />
-        <Tab icon={<InventoryIcon />} label="Histórico Estoque" />
+        <Tab icon={<InventoryIcon />} label="Conferência" />
+        <Tab icon={<ReceiptLongIcon />} label="Extrato Dia" /> {/* NOVA ABA */}
       </Tabs>
 
       {/* === ABA 0: DASHBOARD FINANCEIRO === */}
@@ -241,22 +313,8 @@ function Gerenciamento({ aoVoltar }) {
             {carregando ? <CircularProgress /> : (
                 <Stack spacing={3}>
                 <Grid container spacing={2}>
-                    <Grid item xs={6}>
-                        <Card style={{ backgroundColor: '#e3f2fd' }}>
-                            <CardContent>
-                                <Typography variant="caption">FATURAMENTO ({filtroRegiao.toUpperCase()})</Typography>
-                                <Typography variant="h6" color="primary" style={{ fontWeight: 'bold' }}>R$ {metricas.faturamentoTotal.toFixed(2)}</Typography>
-                            </CardContent>
-                        </Card>
-                    </Grid>
-                    <Grid item xs={6}>
-                        <Card style={{ backgroundColor: '#fff3e0' }}>
-                            <CardContent>
-                                <Typography variant="caption">VENDAS ({filtroRegiao.toUpperCase()})</Typography>
-                                <Typography variant="h6" style={{ color: '#e65100', fontWeight: 'bold' }}>{metricas.qtdVendas}</Typography>
-                            </CardContent>
-                        </Card>
-                    </Grid>
+                    <Grid item xs={6}><Card style={{ backgroundColor: '#e3f2fd' }}><CardContent><Typography variant="caption">FATURAMENTO ({filtroRegiao.toUpperCase()})</Typography><Typography variant="h6" color="primary" style={{ fontWeight: 'bold' }}>R$ {metricas.faturamentoTotal.toFixed(2)}</Typography></CardContent></Card></Grid>
+                    <Grid item xs={6}><Card style={{ backgroundColor: '#fff3e0' }}><CardContent><Typography variant="caption">VENDAS ({filtroRegiao.toUpperCase()})</Typography><Typography variant="h6" style={{ color: '#e65100', fontWeight: 'bold' }}>{metricas.qtdVendas}</Typography></CardContent></Card></Grid>
                 </Grid>
 
                 <Paper elevation={2} style={{ padding: '15px' }}>
@@ -300,30 +358,12 @@ function Gerenciamento({ aoVoltar }) {
                      <Divider />
                      <Stack spacing={1} mt={1}>
                          {grupo.itens.map(item => {
-                             // Lógica para calcular a diferença detalhada
                              const difCheio = (item.fisico_cheio || 0) - (item.sistema_cheio || 0)
                              const difVazio = (item.fisico_vazio || 0) - (item.sistema_vazio || 0)
-
                              return (
                                  <Box key={item.id} display="flex" justifyContent="space-between" alignItems="center" style={{padding: '4px 0'}}>
                                      <Typography variant="body2" style={{fontWeight: '500'}}>{item.produto_nome}</Typography>
-                                     
-                                     {item.status === 'ok' ? (
-                                         <Typography variant="caption" color="textSecondary">Contagem batida</Typography>
-                                     ) : (
-                                         <Box textAlign="right">
-                                             {difCheio !== 0 && (
-                                                 <Typography variant="caption" display="block" style={{ color: 'red', fontWeight: 'bold' }}>
-                                                     Cheios: {difCheio > 0 ? `+${difCheio}` : difCheio}
-                                                 </Typography>
-                                             )}
-                                             {difVazio !== 0 && (
-                                                 <Typography variant="caption" display="block" style={{ color: '#ef6c00', fontWeight: 'bold' }}>
-                                                     Vazios: {difVazio > 0 ? `+${difVazio}` : difVazio}
-                                                 </Typography>
-                                             )}
-                                         </Box>
-                                     )}
+                                     {item.status === 'ok' ? ( <Typography variant="caption" color="textSecondary">Contagem batida</Typography> ) : ( <Box textAlign="right">{difCheio !== 0 && (<Typography variant="caption" display="block" style={{ color: 'red', fontWeight: 'bold' }}>Cheios: {difCheio > 0 ? `+${difCheio}` : difCheio}</Typography>)}{difVazio !== 0 && (<Typography variant="caption" display="block" style={{ color: '#ef6c00', fontWeight: 'bold' }}>Vazios: {difVazio > 0 ? `+${difVazio}` : difVazio}</Typography>)}</Box>)}
                                  </Box>
                              )
                          })}
@@ -331,6 +371,100 @@ function Gerenciamento({ aoVoltar }) {
                  </Paper>
              ))}
              {historicoConferencias.length === 0 && (<Typography align="center" color="textSecondary" mt={4}>Nenhuma conferência registrada.</Typography>)}
+        </Stack>
+      )}
+
+      {/* === ABA 2: EXTRATO DIÁRIO (NOVA) === */}
+      {tabAtual === 2 && (
+        <Stack spacing={2}>
+             <Paper elevation={0} style={{ padding: '15px', backgroundColor: '#e3f2fd' }}>
+                <TextField 
+                    type="date" 
+                    label="Selecionar Dia" 
+                    value={dataExtrato} 
+                    onChange={(e) => setDataExtrato(e.target.value)} 
+                    fullWidth 
+                    InputLabelProps={{ shrink: true }}
+                    style={{ backgroundColor: 'white', borderRadius: 4 }}
+                />
+             </Paper>
+
+             {carregando ? <CircularProgress /> : (
+                 <>
+                    {/* RESUMO DO DIA */}
+                    <Grid container spacing={2}>
+                        <Grid item xs={4}>
+                            <Paper style={{ padding: 10, textAlign: 'center' }}>
+                                <Typography variant="caption">VENDAS</Typography>
+                                <Typography variant="body1" fontWeight="bold">R$ {extratoDia.totalVendas.toFixed(2)}</Typography>
+                            </Paper>
+                        </Grid>
+                        <Grid item xs={4}>
+                            <Paper style={{ padding: 10, textAlign: 'center' }}>
+                                <Typography variant="caption">RECEBIDO</Typography>
+                                <Typography variant="body1" fontWeight="bold" color="success.main">R$ {extratoDia.totalRecebimentos.toFixed(2)}</Typography>
+                            </Paper>
+                        </Grid>
+                        <Grid item xs={4}>
+                            <Paper style={{ padding: 10, textAlign: 'center', backgroundColor: '#e8f5e9' }}>
+                                <Typography variant="caption">TOTAL</Typography>
+                                <Typography variant="body1" fontWeight="bold" color="green">R$ {(extratoDia.totalVendas + extratoDia.totalRecebimentos).toFixed(2)}</Typography>
+                            </Paper>
+                        </Grid>
+                    </Grid>
+
+                    {/* LISTA DE VENDAS */}
+                    <Typography variant="subtitle2" style={{ marginTop: 20, color: '#666' }}>VENDAS DO DIA ({extratoDia.vendas.length})</Typography>
+                    {extratoDia.vendas.length === 0 ? <Typography variant="caption">Nenhuma venda.</Typography> : (
+                        <Paper>
+                            <List dense>
+                                {extratoDia.vendas.map(v => (
+                                    <div key={v.id}>
+                                        <ListItem>
+                                            <ListItemText 
+                                                primary={`${v.clientes?.nome} (${v.clientes?.tipo})`}
+                                                secondary={v.itens_venda.map(i => `${i.quantidade}x ${i.produtos?.nome}`).join(', ')}
+                                            />
+                                            <Box textAlign="right">
+                                                <Typography variant="body2" fontWeight="bold">R$ {v.total.toFixed(2)}</Typography>
+                                                <Typography variant="caption" display="block">{v.forma_pagamento}</Typography>
+                                            </Box>
+                                        </ListItem>
+                                        <Divider />
+                                    </div>
+                                ))}
+                            </List>
+                        </Paper>
+                    )}
+
+                    {/* LISTA DE RECEBIMENTOS */}
+                    <Typography variant="subtitle2" style={{ marginTop: 20, color: '#666' }}>RECEBIMENTOS DE DÍVIDAS ({extratoDia.recebimentos.length})</Typography>
+                    {extratoDia.recebimentos.length === 0 ? <Typography variant="caption">Nenhum recebimento de dívida.</Typography> : (
+                        <Paper>
+                            <List dense>
+                                {extratoDia.recebimentos.map((r, i) => (
+                                    <div key={i}>
+                                        <ListItem>
+                                            <ListItemText 
+                                                primary={r.cliente}
+                                                secondary={r.obs || 'Pagamento registrado'}
+                                            />
+                                            <Box textAlign="right">
+                                                <Typography variant="body2" fontWeight="bold" color="success.main">+ R$ {r.valor.toFixed(2)}</Typography>
+                                                <Box display="flex" alignItems="center" justifyContent="flex-end" gap={0.5}>
+                                                    <AttachMoneyIcon fontSize="inherit" color="success" />
+                                                    <Typography variant="caption">Recebido</Typography>
+                                                </Box>
+                                            </Box>
+                                        </ListItem>
+                                        <Divider />
+                                    </div>
+                                ))}
+                            </List>
+                        </Paper>
+                    )}
+                 </>
+             )}
         </Stack>
       )}
 
