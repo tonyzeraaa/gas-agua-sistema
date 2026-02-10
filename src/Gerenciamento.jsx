@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
-import { Container, Typography, Button, Paper, Stack, Box, Grid, CircularProgress, LinearProgress, FormControl, InputLabel, Select, MenuItem, Card, CardContent, IconButton, Fab, Dialog, DialogTitle, DialogContent, DialogActions, TextField, InputAdornment, Tabs, Tab, Divider, Chip, Alert, List, ListItem, ListItemText } from '@mui/material'
+import { Container, Typography, Button, Paper, Stack, Box, Grid, CircularProgress, LinearProgress, FormControl, InputLabel, Select, MenuItem, Card, CardContent, IconButton, Fab, Dialog, DialogTitle, DialogContent, DialogActions, TextField, InputAdornment, Tabs, Tab, Divider, Chip, Alert, List, ListItem, ListItemText, ListItemButton } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
 import InventoryIcon from '@mui/icons-material/Inventory'
-import ReceiptLongIcon from '@mui/icons-material/ReceiptLong' // Ícone do Extrato
+import ReceiptLongIcon from '@mui/icons-material/ReceiptLong'
 import RestoreIcon from '@mui/icons-material/Restore'
 import AddCircleIcon from '@mui/icons-material/AddCircle'
 import RemoveCircleIcon from '@mui/icons-material/RemoveCircle'
@@ -12,6 +12,8 @@ import CheckCircleIcon from '@mui/icons-material/CheckCircle'
 import CancelIcon from '@mui/icons-material/Cancel'
 import FilterAltIcon from '@mui/icons-material/FilterAlt'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
+import CloseIcon from '@mui/icons-material/Close' // Import necessário para limpar cliente
+import SearchIcon from '@mui/icons-material/Search'
 import { supabase } from './supabaseClient'
 
 function Gerenciamento({ aoVoltar }) {
@@ -28,8 +30,8 @@ function Gerenciamento({ aoVoltar }) {
   // --- EXTRATO DE CONFERÊNCIAS ---
   const [historicoConferencias, setHistoricoConferencias] = useState([])
 
-  // --- EXTRATO DIÁRIO (NOVA FUNCIONALIDADE) ---
-  const [dataExtrato, setDataExtrato] = useState(new Date().toISOString().split('T')[0]) // Data de Hoje
+  // --- EXTRATO DIÁRIO ---
+  const [dataExtrato, setDataExtrato] = useState(new Date().toISOString().split('T')[0])
   const [extratoDia, setExtratoDia] = useState({ vendas: [], recebimentos: [], totalVendas: 0, totalRecebimentos: 0 })
 
   // Auxiliares e Modais
@@ -37,9 +39,13 @@ function Gerenciamento({ aoVoltar }) {
   const [listaProdutos, setListaProdutos] = useState([])
   const [listaPrecos, setListaPrecos] = useState([])
 
+  // --- MODAL RETROATIVO (ATUALIZADO) ---
   const [modalRetroativo, setModalRetroativo] = useState(false)
   const [dataRetroativa, setDataRetroativa] = useState(new Date().toISOString().split('T')[0])
-  const [clienteRetroativo, setClienteRetroativo] = useState('')
+  
+  const [clienteRetroativo, setClienteRetroativo] = useState('') // ID do cliente
+  const [termoBuscaRetroativo, setTermoBuscaRetroativo] = useState('') // Texto da busca
+  
   const [carrinhoRetroativo, setCarrinhoRetroativo] = useState({}) 
   const [pagamentoRetroativo, setPagamentoRetroativo] = useState('dinheiro')
   const [salvandoRetroativo, setSalvandoRetroativo] = useState(false)
@@ -48,19 +54,16 @@ function Gerenciamento({ aoVoltar }) {
   const [novosPrecos, setNovosPrecos] = useState({})
   const [salvandoPrecos, setSalvandoPrecos] = useState(false)
 
-  // Carrega dados iniciais e Dashboard
   useEffect(() => {
     carregarDados()
   }, [mesSelecionado, anoSelecionado, tabAtual])
 
-  // Recalcula métricas do Dashboard quando filtro muda
   useEffect(() => {
     if (vendasBrutas.length > 0 || !carregando) {
         processarMetricas(vendasBrutas)
     }
   }, [vendasBrutas, filtroRegiao])
 
-  // Carrega Extrato Diário quando muda a Data ou a Aba
   useEffect(() => {
     if (tabAtual === 2) {
         carregarExtratoDia()
@@ -69,8 +72,6 @@ function Gerenciamento({ aoVoltar }) {
 
   async function carregarDados() {
     setCarregando(true)
-    
-    // 1. Dashboard (Mês inteiro)
     const dataInicio = new Date(anoSelecionado, mesSelecionado, 1).toISOString()
     const dataFim = new Date(anoSelecionado, mesSelecionado + 1, 0, 23, 59, 59).toISOString()
     
@@ -82,13 +83,11 @@ function Gerenciamento({ aoVoltar }) {
 
     if (dadosVendas) setVendasBrutas(dadosVendas)
 
-    // 2. Extrato de Conferências
     if (tabAtual === 1) {
         const { data: conferencias } = await supabase.from('historico_conferencias').select('*').order('data_conferencia', { ascending: false }).limit(50) 
         if (conferencias) agruparConferencias(conferencias)
     }
 
-    // Listas Auxiliares
     const { data: cli } = await supabase.from('clientes').select('*')
     const { data: prod } = await supabase.from('produtos').select('*').order('id')
     const { data: prec } = await supabase.from('precos_personalizados').select('*')
@@ -103,11 +102,8 @@ function Gerenciamento({ aoVoltar }) {
     setCarregando(false)
   }
 
-  // --- NOVA FUNÇÃO: CARREGAR EXTRATO DO DIA ---
   async function carregarExtratoDia() {
       setCarregando(true)
-      
-      // 1. Buscar Vendas do Dia
       const inicioDia = `${dataExtrato}T00:00:00`
       const fimDia = `${dataExtrato}T23:59:59`
 
@@ -118,7 +114,6 @@ function Gerenciamento({ aoVoltar }) {
           .lte('data_venda', fimDia)
           .order('data_venda', { ascending: false })
 
-      // Calcular Total de Vendas
       let totalVendas = 0
       const listaVendas = vendasDia || []
       listaVendas.forEach(v => {
@@ -127,53 +122,32 @@ function Gerenciamento({ aoVoltar }) {
           totalVendas += totalV
       })
 
-      // 2. Buscar Recebimentos (Varrendo observações dos clientes)
-      // Como não temos tabela de pagamentos, buscamos nas observações que contêm a data
-      const dataFormatada = new Date(dataExtrato + 'T12:00:00').toLocaleDateString('pt-BR') // Ex: 10/02/2026
-      
-      const { data: clientesComObs } = await supabase
-          .from('clientes')
-          .select('id, nome, observacoes')
-          .ilike('observacoes', `%[${dataFormatada}] PAGAMENTO%`) // Busca texto específico
+      const dataFormatada = new Date(dataExtrato + 'T12:00:00').toLocaleDateString('pt-BR')
+      const { data: clientesComObs } = await supabase.from('clientes').select('id, nome, observacoes').ilike('observacoes', `%[${dataFormatada}] PAGAMENTO%`)
 
       let totalRecebimentos = 0
       const listaRecebimentos = []
 
       if (clientesComObs) {
           clientesComObs.forEach(cli => {
-              // Quebra as linhas da observação para achar a linha do pagamento
               const linhas = cli.observacoes.split('\n')
               linhas.forEach(linha => {
                   if (linha.includes(`[${dataFormatada}] PAGAMENTO`)) {
-                      // Extrai o valor da string "R$ 50.00"
                       try {
-                          const parteValor = linha.split('R$ ')[1].split(' ')[0] // Pega o número logo depois do R$
+                          const parteValor = linha.split('R$ ')[1].split(' ')[0]
                           const valor = parseFloat(parteValor)
-                          const obsExtra = linha.split('- ')[1] || '' // Pega o comentário se houver
-
+                          const obsExtra = linha.split('- ')[1] || ''
                           if (!isNaN(valor)) {
                               totalRecebimentos += valor
-                              listaRecebimentos.push({
-                                  cliente: cli.nome,
-                                  valor: valor,
-                                  obs: obsExtra
-                              })
+                              listaRecebimentos.push({ cliente: cli.nome, valor: valor, obs: obsExtra })
                           }
-                      } catch (e) {
-                          console.log('Erro ao ler linha:', linha)
-                      }
+                      } catch (e) { console.log('Erro ao ler linha:', linha) }
                   }
               })
           })
       }
 
-      setExtratoDia({
-          vendas: listaVendas,
-          recebimentos: listaRecebimentos,
-          totalVendas,
-          totalRecebimentos
-      })
-
+      setExtratoDia({ vendas: listaVendas, recebimentos: listaRecebimentos, totalVendas, totalRecebimentos })
       setCarregando(false)
   }
 
@@ -210,7 +184,6 @@ function Gerenciamento({ aoVoltar }) {
       setHistoricoConferencias(Object.values(grupos))
   }
 
-  // Funções Auxiliares (Retroativo/Preços)
   const getPrecoReal = (produto, idCliente) => {
       if (!idCliente) return produto.preco_padrao
       const especial = listaPrecos.find(p => p.id_cliente === idCliente && p.id_produto === produto.id)
@@ -229,23 +202,44 @@ function Gerenciamento({ aoVoltar }) {
       listaProdutos.forEach(p => { const qtd = carrinhoRetroativo[p.id] || 0; total += qtd * getPrecoReal(p, clienteRetroativo) })
       return total
   }
+  
   const salvarVendaRetroativa = async () => { 
-      if (!clienteRetroativo || Object.keys(carrinhoRetroativo).length === 0 || !dataRetroativa) return alert('Preencha tudo.')
+      if (!clienteRetroativo || Object.keys(carrinhoRetroativo).length === 0 || !dataRetroativa) return alert('Preencha Cliente, Produtos e Data.')
       setSalvandoRetroativo(true)
       try {
-          const { data: vendaCriada, error: erroVenda } = await supabase.from('vendas').insert([{ id_cliente: clienteRetroativo, data_venda: `${dataRetroativa}T12:00:00`, forma_pagamento: pagamentoRetroativo, status_pagamento: pagamentoRetroativo === 'fiado' ? 'pendente' : 'pago' }]).select().single()
+          // Usa a data + hora fixa para garantir o dia
+          const { data: vendaCriada, error: erroVenda } = await supabase.from('vendas').insert([{ 
+              id_cliente: clienteRetroativo, 
+              data_venda: `${dataRetroativa}T12:00:00`, 
+              forma_pagamento: pagamentoRetroativo, // <--- USA O QUE FOI SELECIONADO
+              status_pagamento: pagamentoRetroativo === 'fiado' ? 'pendente' : 'pago' 
+          }]).select().single()
+
           if (erroVenda) throw erroVenda
+
           const itensParaSalvar = []
           Object.entries(carrinhoRetroativo).forEach(([idProd, qtd]) => {
               const produto = listaProdutos.find(p => p.id === parseInt(idProd))
-              itensParaSalvar.push({ id_venda: vendaCriada.id, id_produto: parseInt(idProd), quantidade: qtd, preco_praticado: getPrecoReal(produto, clienteRetroativo) })
+              itensParaSalvar.push({ 
+                  id_venda: vendaCriada.id, 
+                  id_produto: parseInt(idProd), 
+                  quantidade: qtd, 
+                  preco_praticado: getPrecoReal(produto, clienteRetroativo) 
+              })
           })
           await supabase.from('itens_venda').insert(itensParaSalvar)
+          
           alert('Venda retroativa lançada!')
-          setModalRetroativo(false); setCarrinhoRetroativo({}); setClienteRetroativo(''); 
-          carregarDados(); 
-      } catch (error) { console.error(error); alert('Erro.') } finally { setSalvandoRetroativo(false) }
+          setModalRetroativo(false)
+          setCarrinhoRetroativo({})
+          setClienteRetroativo('')
+          setTermoBuscaRetroativo('')
+          setPagamentoRetroativo('dinheiro') // Reseta
+          carregarDados()
+
+      } catch (error) { console.error(error); alert('Erro ao salvar.') } finally { setSalvandoRetroativo(false) }
   }
+
   const salvarNovosPrecos = async () => { 
     setSalvandoPrecos(true)
     try {
@@ -259,6 +253,11 @@ function Gerenciamento({ aoVoltar }) {
   const handlePriceChangeInput = (id, valor) => setNovosPrecos(prev => ({ ...prev, [id]: valor }))
   const ordenarRanking = (obj) => Object.entries(obj).sort((a, b) => b[1] - a[1])
 
+  // Lógica de filtro para o modal retroativo
+  const clientesFiltradosRetroativo = listaClientes.filter(c => 
+      c.nome.toLowerCase().includes(termoBuscaRetroativo.toLowerCase())
+  )
+
   return (
     <Container maxWidth="sm" style={{ marginTop: '1rem', paddingBottom: '80px' }}>
       
@@ -271,7 +270,7 @@ function Gerenciamento({ aoVoltar }) {
       <Tabs value={tabAtual} onChange={(e, v) => setTabAtual(v)} variant="fullWidth" style={{ marginBottom: 20 }}>
         <Tab icon={<TrendingUpIcon />} label="Financeiro" />
         <Tab icon={<InventoryIcon />} label="Conferência" />
-        <Tab icon={<ReceiptLongIcon />} label="Extrato Dia" /> {/* NOVA ABA */}
+        <Tab icon={<ReceiptLongIcon />} label="Extrato Dia" />
       </Tabs>
 
       {/* === ABA 0: DASHBOARD FINANCEIRO === */}
@@ -374,7 +373,7 @@ function Gerenciamento({ aoVoltar }) {
         </Stack>
       )}
 
-      {/* === ABA 2: EXTRATO DIÁRIO (NOVA) === */}
+      {/* === ABA 2: EXTRATO DIÁRIO === */}
       {tabAtual === 2 && (
         <Stack spacing={2}>
              <Paper elevation={0} style={{ padding: '15px', backgroundColor: '#e3f2fd' }}>
@@ -468,13 +467,106 @@ function Gerenciamento({ aoVoltar }) {
         </Stack>
       )}
 
-      {/* MODAIS MANTIDOS */}
+      {/* MODAL RETROATIVO (ATUALIZADO COM BUSCA E FORMA DE PAGAMENTO) */}
       <Dialog open={modalRetroativo} onClose={() => setModalRetroativo(false)} fullWidth>
         <DialogTitle>Lançar Venda Passada</DialogTitle>
-        <DialogContent><Stack spacing={2} mt={1}><TextField type="date" label="Data" InputLabelProps={{ shrink: true }} value={dataRetroativa} onChange={e=>setDataRetroativa(e.target.value)} fullWidth /><TextField select label="Cliente" value={clienteRetroativo} onChange={e=>{setClienteRetroativo(e.target.value); setCarrinhoRetroativo({})}} fullWidth>{listaClientes.map(c=><MenuItem key={c.id} value={c.id}>{c.nome}</MenuItem>)}</TextField><Box border="1px solid #eee" p={1}>{listaProdutos.map(p => {const qtd = carrinhoRetroativo[p.id] || 0; return ( <Box key={p.id} display="flex" justifyContent="space-between" alignItems="center" mb={1}><Typography variant="body2">{p.nome}</Typography><Box display="flex" alignItems="center"><IconButton size="small" onClick={()=>removeItem(p)}><RemoveCircleIcon/></IconButton>{qtd}<IconButton size="small" onClick={()=>addItem(p)}><AddCircleIcon/></IconButton></Box></Box> )})}</Box><Typography align="right">Total: R$ {calcularTotalRetroativo().toFixed(2)}</Typography></Stack></DialogContent>
-        <DialogActions><Button onClick={() => setModalRetroativo(false)}>Cancelar</Button><Button onClick={salvarVendaRetroativa} variant="contained" disabled={salvandoRetroativo}>Salvar</Button></DialogActions>
+        <DialogContent>
+            <Stack spacing={2} mt={1}>
+                
+                {/* 1. SELETOR DE DATA */}
+                <TextField 
+                    type="date" 
+                    label="Data da Venda" 
+                    InputLabelProps={{ shrink: true }} 
+                    value={dataRetroativa} 
+                    onChange={e => setDataRetroativa(e.target.value)} 
+                    fullWidth 
+                />
+
+                {/* 2. BUSCA DE CLIENTE (AUTOCOMPLETE MANUAL) */}
+                <Box>
+                    {!clienteRetroativo ? (
+                        <>
+                            <TextField 
+                                label="Buscar Cliente..." 
+                                placeholder="Digite o nome..."
+                                value={termoBuscaRetroativo}
+                                onChange={(e) => setTermoBuscaRetroativo(e.target.value)}
+                                fullWidth
+                                InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon /></InputAdornment> }}
+                            />
+                            {termoBuscaRetroativo.length > 0 && (
+                                <Paper style={{ maxHeight: 150, overflow: 'auto', marginTop: 5 }}>
+                                    <List dense>
+                                        {clientesFiltradosRetroativo.map(c => (
+                                            <ListItemButton key={c.id} onClick={() => { setClienteRetroativo(c.id); setTermoBuscaRetroativo(''); }}>
+                                                <ListItemText primary={c.nome} secondary={c.endereco} />
+                                            </ListItemButton>
+                                        ))}
+                                        {clientesFiltradosRetroativo.length === 0 && <Typography variant="caption" style={{padding:10}}>Nenhum cliente.</Typography>}
+                                    </List>
+                                </Paper>
+                            )}
+                        </>
+                    ) : (
+                        <Alert 
+                            severity="success" 
+                            action={
+                                <IconButton size="small" onClick={() => setClienteRetroativo('')}>
+                                    <CloseIcon fontSize="inherit" />
+                                </IconButton>
+                            }
+                        >
+                            Cliente: <strong>{listaClientes.find(c => c.id === clienteRetroativo)?.nome}</strong>
+                        </Alert>
+                    )}
+                </Box>
+
+                {/* 3. FORMA DE PAGAMENTO */}
+                <TextField
+                    select
+                    label="Forma de Pagamento"
+                    value={pagamentoRetroativo}
+                    onChange={(e) => setPagamentoRetroativo(e.target.value)}
+                    fullWidth
+                >
+                    <MenuItem value="dinheiro">Dinheiro</MenuItem>
+                    <MenuItem value="pix">Pix</MenuItem>
+                    <MenuItem value="cartao">Cartão</MenuItem>
+                    <MenuItem value="fiado">Fiado (Pendura)</MenuItem>
+                </TextField>
+
+                <Divider />
+
+                {/* 4. SELEÇÃO DE PRODUTOS */}
+                <Box border="1px solid #eee" p={1} borderRadius={2}>
+                    <Typography variant="caption" color="textSecondary">PRODUTOS:</Typography>
+                    {listaProdutos.map(p => {
+                        const qtd = carrinhoRetroativo[p.id] || 0; 
+                        return ( 
+                            <Box key={p.id} display="flex" justifyContent="space-between" alignItems="center" mb={1} mt={1}>
+                                <Typography variant="body2">{p.nome}</Typography>
+                                <Box display="flex" alignItems="center">
+                                    <IconButton size="small" onClick={()=>removeItem(p)} color="error"><RemoveCircleIcon/></IconButton>
+                                    <Typography style={{width: 20, textAlign:'center'}}>{qtd}</Typography>
+                                    <IconButton size="small" onClick={()=>addItem(p)} color="primary"><AddCircleIcon/></IconButton>
+                                </Box>
+                            </Box> 
+                        )
+                    })}
+                </Box>
+                
+                <Typography align="right" variant="h6">Total: R$ {calcularTotalRetroativo().toFixed(2)}</Typography>
+
+            </Stack>
+        </DialogContent>
+        <DialogActions>
+            <Button onClick={() => setModalRetroativo(false)}>Cancelar</Button>
+            <Button onClick={salvarVendaRetroativa} variant="contained" disabled={salvandoRetroativo}>Salvar</Button>
+        </DialogActions>
       </Dialog>
       
+      {/* MODAL PREÇOS */}
       <Dialog open={modalPrecos} onClose={() => setModalPrecos(false)} fullWidth>
         <DialogTitle>Tabela de Preços</DialogTitle>
         <DialogContent><Stack spacing={2} mt={1}>{listaProdutos.map(prod => ( <Box key={prod.id} display="flex" alignItems="center" gap={2}><Typography variant="body1" style={{width:100}}>{prod.nome}</Typography><TextField type="number" fullWidth value={novosPrecos[prod.id]} onChange={(e)=>handlePriceChangeInput(prod.id, e.target.value)} InputProps={{startAdornment:<InputAdornment position="start">R$</InputAdornment>}} /></Box> ))}</Stack></DialogContent>
