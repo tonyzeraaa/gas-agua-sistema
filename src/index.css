@@ -1,0 +1,14 @@
+body {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  background-color: #f0f2f5; /* Cor de fundo cinza clarinho tipo WhatsApp/Facebook */
+  font-family: Roboto, Helvetica, Arial, sans-serif;
+  height: 100vh;
+  width: 100vw;
+}
+
+#root {
+  width: 100%;
+  height: 100%;
+}
