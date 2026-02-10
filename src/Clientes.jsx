@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Container, Typography, Button, Paper, Stack, Box, Chip, CircularProgress, TextField, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Fab, InputAdornment, Tooltip } from '@mui/material'
+import { Container, Typography, Button, Paper, Stack, Box, Chip, CircularProgress, TextField, Dialog, DialogTitle, DialogContent, DialogActions, IconButton, Fab, InputAdornment, Tooltip, Tabs, Tab, MenuItem } from '@mui/material'
 import ArrowBackIcon from '@mui/icons-material/ArrowBack'
 import AttachMoneyIcon from '@mui/icons-material/AttachMoney'
 import MoneyOffIcon from '@mui/icons-material/MoneyOff'
@@ -11,12 +11,14 @@ import StoreIcon from '@mui/icons-material/Store'
 import AgricultureIcon from '@mui/icons-material/Agriculture'
 import AccountBalanceIcon from '@mui/icons-material/AccountBalance'
 import VisibilityIcon from '@mui/icons-material/Visibility'
-import NoteAddIcon from '@mui/icons-material/NoteAdd' // Ícone para anotação
+import NoteAddIcon from '@mui/icons-material/NoteAdd'
+import LocalGasStationIcon from '@mui/icons-material/LocalGasStation' // Ícone Produto
 import { supabase } from './supabaseClient'
 
 function Clientes({ aoVoltar, aoClicarCliente }) {
   const [clientes, setClientes] = useState([])
   const [produtos, setProdutos] = useState([])
+  const [listaPrecos, setListaPrecos] = useState([])
   const [carregando, setCarregando] = useState(true)
   
   const [termoBusca, setTermoBusca] = useState('')
@@ -27,8 +29,13 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
   const [modalPagamento, setModalPagamento] = useState(null)
   const [modalDivida, setModalDivida] = useState(null)
   const [valorInput, setValorInput] = useState('')
-  const [observacaoInput, setObservacaoInput] = useState('') // <--- NOVO: Estado para o comentário
+  const [observacaoInput, setObservacaoInput] = useState('')
   
+  // Novo: Controle da aba de dívida (Dinheiro vs Produto)
+  const [abaDivida, setAbaDivida] = useState(0) // 0 = Dinheiro, 1 = Produto
+  const [produtoDividaId, setProdutoDividaId] = useState('')
+  const [qtdDivida, setQtdDivida] = useState(1)
+
   const [salvando, setSalvando] = useState(false)
   const [modalNovoCliente, setModalNovoCliente] = useState(false)
   const [novoCliente, setNovoCliente] = useState({ nome: '', telefone: '', endereco: '', tipo: 'cidade' })
@@ -42,9 +49,10 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
     setCarregando(true)
     const { data: listaClientes } = await supabase.from('clientes').select('*').order('nome')
     const { data: listaProdutos } = await supabase.from('produtos').select('*').order('id')
-    const { data: listaPrecos } = await supabase.from('precos_personalizados').select('*')
+    const { data: precos } = await supabase.from('precos_personalizados').select('*')
     
     if (listaProdutos) setProdutos(listaProdutos)
+    if (precos) setListaPrecos(precos)
 
     const { data: vendasPendentes } = await supabase
       .from('vendas')
@@ -60,7 +68,7 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
         venda.itens_venda.forEach(item => {
           const produto = listaProdutos.find(p => p.id === item.id_produto)
           if (produto) {
-            const precoEspecial = listaPrecos.find(p => p.id_cliente === cliente.id && p.id_produto === produto.id)
+            const precoEspecial = precos.find(p => p.id_cliente === cliente.id && p.id_produto === produto.id)
             const precoVigente = precoEspecial ? precoEspecial.preco_acordado : produto.preco_padrao
             
             const subtotalItem = item.quantidade * precoVigente
@@ -95,7 +103,6 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
 
   // --- AÇÕES ---
   
-  // 1. REALIZAR PAGAMENTO + ANOTAÇÃO
   const realizarPagamento = async () => {
     if (!valorInput || parseFloat(valorInput) <= 0) return alert('Digite um valor!')
     setSalvando(true)
@@ -103,24 +110,15 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
       const valor = parseFloat(valorInput)
       const novoSaldo = (modalPagamento.saldo_credito || 0) + valor
       
-      // Cria o texto do histórico
       const dataHoje = new Date().toLocaleDateString('pt-BR')
       const novaLinhaObs = `[${dataHoje}] PAGAMENTO: R$ ${valor.toFixed(2)}${observacaoInput ? ' - ' + observacaoInput : ''}`
-      const obsAtualizada = modalPagamento.observacoes 
-        ? `${novaLinhaObs}\n${modalPagamento.observacoes}` 
-        : novaLinhaObs
+      const obsAtualizada = modalPagamento.observacoes ? `${novaLinhaObs}\n${modalPagamento.observacoes}` : novaLinhaObs
 
-      await supabase.from('clientes')
-        .update({ 
-            saldo_credito: novoSaldo,
-            observacoes: obsAtualizada // <--- Salva no histórico do perfil
-        })
-        .eq('id', modalPagamento.id)
+      await supabase.from('clientes').update({ saldo_credito: novoSaldo, observacoes: obsAtualizada }).eq('id', modalPagamento.id)
 
-      alert('Pagamento registrado e anotado no perfil!')
+      alert('Pagamento registrado!')
       setModalPagamento(null)
-      setValorInput('')
-      setObservacaoInput('')
+      setValorInput(''); setObservacaoInput('')
       buscarDadosFinanceiros()
     } catch (error) {
       alert('Erro ao pagar')
@@ -129,37 +127,71 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
     }
   }
 
-  // 2. ADICIONAR DÍVIDA + ANOTAÇÃO
-  const adicionarDividaManual = async () => {
-    if (!valorInput || parseFloat(valorInput) <= 0) return alert('Digite um valor!')
+  const adicionarDivida = async () => {
     setSalvando(true)
     try {
-      const valor = parseFloat(valorInput)
-      const novaDivida = (modalDivida.saldo_devedor_inicial || 0) + valor
+        const dataHoje = new Date().toLocaleDateString('pt-BR')
 
-      // Cria o texto do histórico
-      const dataHoje = new Date().toLocaleDateString('pt-BR')
-      const novaLinhaObs = `[${dataHoje}] DÍVIDA ADICIONADA: R$ ${valor.toFixed(2)}${observacaoInput ? ' - ' + observacaoInput : ''}`
-      const obsAtualizada = modalDivida.observacoes 
-        ? `${novaLinhaObs}\n${modalDivida.observacoes}` 
-        : novaLinhaObs
+        // MODO 1: DÍVIDA EM DINHEIRO (SALDO DEVEDOR)
+        if (abaDivida === 0) {
+            if (!valorInput || parseFloat(valorInput) <= 0) return alert('Digite um valor!')
+            
+            const valor = parseFloat(valorInput)
+            const novaDivida = (modalDivida.saldo_devedor_inicial || 0) + valor
+            const novaLinhaObs = `[${dataHoje}] DÍVIDA $$: R$ ${valor.toFixed(2)}${observacaoInput ? ' - ' + observacaoInput : ''}`
+            const obsAtualizada = modalDivida.observacoes ? `${novaLinhaObs}\n${modalDivida.observacoes}` : novaLinhaObs
 
-      await supabase.from('clientes')
-        .update({ 
-            saldo_devedor_inicial: novaDivida,
-            observacoes: obsAtualizada // <--- Salva no histórico do perfil
-        })
-        .eq('id', modalDivida.id)
+            await supabase.from('clientes').update({ saldo_devedor_inicial: novaDivida, observacoes: obsAtualizada }).eq('id', modalDivida.id)
+        } 
+        
+        // MODO 2: DÍVIDA EM PRODUTO (CRIA VENDA FIADO)
+        else {
+            if (!produtoDividaId || qtdDivida <= 0) return alert('Selecione produto e quantidade!')
+            
+            // 1. Cria a venda "pendente" (data de hoje)
+            const { data: venda, error: errVenda } = await supabase.from('vendas').insert([{
+                id_cliente: modalDivida.id,
+                data_venda: new Date().toISOString(),
+                forma_pagamento: 'fiado',
+                status_pagamento: 'pendente' // <--- O segredo está aqui
+            }]).select().single()
 
-      alert('Dívida adicionada e anotada no perfil!')
-      setModalDivida(null)
-      setValorInput('')
-      setObservacaoInput('')
-      buscarDadosFinanceiros()
+            if (errVenda) throw errVenda
+
+            // 2. Descobre o preço ATUAL para registrar (apenas referência, pois o cálculo de dívida é dinâmico)
+            const produto = produtos.find(p => p.id === parseInt(produtoDividaId))
+            const precoEspecial = listaPrecos.find(p => p.id_cliente === modalDivida.id && p.id_produto === produto.id)
+            const precoPraticado = precoEspecial ? precoEspecial.preco_acordado : produto.preco_padrao
+
+            // 3. Insere o item e BAIXA ESTOQUE (Pois se ele deve produto, ele levou produto)
+            await supabase.from('itens_venda').insert([{
+                id_venda: venda.id,
+                id_produto: parseInt(produtoDividaId),
+                quantidade: parseInt(qtdDivida),
+                preco_praticado: precoPraticado
+            }])
+
+            // Baixa estoque
+            await supabase.from('produtos').update({ estoque_atual: produto.estoque_atual - parseInt(qtdDivida) }).eq('id', parseInt(produtoDividaId))
+
+            // Anotação Opcional no histórico
+            if (observacaoInput) {
+                const novaLinhaObs = `[${dataHoje}] FIADO MANUAL: ${qtdDivida}x ${produto.nome} - ${observacaoInput}`
+                const obsAtualizada = modalDivida.observacoes ? `${novaLinhaObs}\n${modalDivida.observacoes}` : novaLinhaObs
+                await supabase.from('clientes').update({ observacoes: obsAtualizada }).eq('id', modalDivida.id)
+            }
+        }
+
+        alert('Dívida adicionada com sucesso!')
+        setModalDivida(null)
+        setValorInput(''); setObservacaoInput(''); setProdutoDividaId(''); setQtdDivida(1)
+        buscarDadosFinanceiros()
+
     } catch (error) {
-      alert('Erro ao adicionar dívida')
+        console.error(error)
+        alert('Erro ao adicionar dívida')
     } finally {
-      setSalvando(false)
+        setSalvando(false)
     }
   }
 
@@ -281,7 +313,7 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
                   <Tooltip title="Adicionar Dívida Manual">
                     <IconButton 
                       style={{ color: '#d32f2f', marginLeft: 2 }} 
-                      onClick={(e) => { e.stopPropagation(); setModalDivida(cliente); setValorInput(''); setObservacaoInput(''); }}
+                      onClick={(e) => { e.stopPropagation(); setModalDivida(cliente); setValorInput(''); setObservacaoInput(''); setAbaDivida(0); setProdutoDividaId(''); }}
                     >
                       <MoneyOffIcon />
                     </IconButton>
@@ -345,7 +377,6 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
                 onChange={(e) => setValorInput(e.target.value)} 
                 InputProps={{ startAdornment: <InputAdornment position="start">R$</InputAdornment> }}
             />
-            {/* Campo de Comentário */}
             <TextField
                 label="Anotação (Opcional)"
                 placeholder="Ex: Pix da esposa; Parte em dinheiro..."
@@ -364,39 +395,76 @@ function Clientes({ aoVoltar, aoClicarCliente }) {
         </DialogActions>
       </Dialog>
 
-      {/* MODAL ADICIONAR DÍVIDA (COBRAR) */}
+      {/* MODAL ADICIONAR DÍVIDA (COBRAR) - AGORA COM ABAS */}
       <Dialog open={!!modalDivida} onClose={() => setModalDivida(null)} fullWidth>
         <DialogTitle style={{ color: '#d32f2f' }}>Adicionar Dívida para {modalDivida?.nome}</DialogTitle>
         <DialogContent>
-          <Typography gutterBottom variant="body2" color="textSecondary">
-            Use para registrar dívidas antigas ou empréstimos sem venda de mercadoria.
-          </Typography>
-          <Stack spacing={2} mt={1}>
-            <TextField 
-                label="Valor da Dívida" 
-                type="number" 
-                fullWidth 
-                autoFocus
-                value={valorInput} 
-                onChange={(e) => setValorInput(e.target.value)} 
-                InputProps={{ startAdornment: <InputAdornment position="start">R$</InputAdornment> }}
-            />
-            {/* Campo de Comentário */}
-            <TextField
-                label="Motivo / Anotação"
-                placeholder="Ex: Empréstimo pessoal; Compra antiga..."
+          
+          <Tabs value={abaDivida} onChange={(e, v) => setAbaDivida(v)} variant="fullWidth" style={{ marginBottom: 20 }}>
+            <Tab icon={<AttachMoneyIcon />} label="Em Dinheiro" />
+            <Tab icon={<LocalGasStationIcon />} label="Em Produto" />
+          </Tabs>
+
+          {/* ABA 0: DINHEIRO (VALOR FIXO) */}
+          {abaDivida === 0 && (
+              <Stack spacing={2} mt={1}>
+                <Typography variant="body2" color="textSecondary">
+                    Use para empréstimos em dinheiro ou cobranças antigas. O valor é <b>fixo</b>.
+                </Typography>
+                <TextField 
+                    label="Valor da Dívida" 
+                    type="number" 
+                    fullWidth 
+                    autoFocus
+                    value={valorInput} 
+                    onChange={(e) => setValorInput(e.target.value)} 
+                    InputProps={{ startAdornment: <InputAdornment position="start">R$</InputAdornment> }}
+                />
+              </Stack>
+          )}
+
+          {/* ABA 1: PRODUTO (VALOR DINÂMICO) */}
+          {abaDivida === 1 && (
+              <Stack spacing={2} mt={1}>
+                <Typography variant="body2" color="textSecondary">
+                    Lança como <b>Venda Fiado</b>. Se o preço do produto subir, a dívida <b>sobe junto</b>.
+                </Typography>
+                <TextField 
+                    select 
+                    label="Produto" 
+                    fullWidth 
+                    value={produtoDividaId} 
+                    onChange={(e) => setProdutoDividaId(e.target.value)}
+                >
+                    {produtos.map(p => <MenuItem key={p.id} value={p.id}>{p.nome}</MenuItem>)}
+                </TextField>
+                
+                <TextField 
+                    label="Quantidade" 
+                    type="number" 
+                    fullWidth 
+                    value={qtdDivida} 
+                    onChange={(e) => setQtdDivida(e.target.value)} 
+                />
+              </Stack>
+          )}
+
+          <TextField
+                label="Motivo / Anotação (Opcional)"
+                placeholder="Ex: Empréstimo pessoal..."
                 fullWidth
                 multiline
                 rows={2}
                 value={observacaoInput}
                 onChange={(e) => setObservacaoInput(e.target.value)}
+                style={{ marginTop: 20 }}
                 InputProps={{ startAdornment: <InputAdornment position="start"><NoteAddIcon color="action" /></InputAdornment> }}
             />
-          </Stack>
+
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setModalDivida(null)}>Cancelar</Button>
-          <Button onClick={adicionarDividaManual} variant="contained" color="error">Adicionar</Button>
+          <Button onClick={adicionarDivida} variant="contained" color="error">Adicionar</Button>
         </DialogActions>
       </Dialog>
 
